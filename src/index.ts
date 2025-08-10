@@ -219,7 +219,7 @@ class FigmaMCPServer {
         },
         {
           name: 'get_file_nodes',
-          description: 'Get specific nodes from a Figma file',
+          description: 'Get specific nodes from a Figma file. IMPORTANT: Pagination (pageSize/cursor) ONLY works when fetching a SINGLE node - it paginates through that node\'s children. When fetching multiple nodes, pagination parameters are ignored. For large nodes use: pageSize: 10-25, summarizeNodes: true, depth: 1.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -233,6 +233,56 @@ class FigmaMCPServer {
                   type: 'string'
                 },
                 description: 'Array of node IDs to retrieve'
+              },
+              pageSize: {
+                type: 'number',
+                description: '[SINGLE NODE ONLY] Number of child nodes to fetch per page. Ignored when fetching multiple nodes.',
+                minimum: 1,
+                maximum: 1000
+              },
+              maxResponseSize: {
+                type: 'number',
+                description: 'Maximum response size in MB (defaults to 50)',
+                minimum: 1,
+                maximum: 100
+              },
+              cursor: {
+                type: 'string',
+                description: '[SINGLE NODE ONLY] Pagination cursor - child index to start from (e.g., "0", "50", "100"). Ignored when fetching multiple nodes.'
+              },
+              depth: {
+                type: 'number',
+                description: 'Maximum depth to traverse in the node tree',
+                minimum: 1
+              },
+              nodeTypes: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: [
+                    'FRAME',
+                    'GROUP',
+                    'VECTOR',
+                    'BOOLEAN_OPERATION',
+                    'STAR',
+                    'LINE',
+                    'TEXT',
+                    'COMPONENT',
+                    'INSTANCE'
+                  ]
+                },
+                description: 'Filter nodes by type. For single nodes: filters children only (parent always kept). For multiple nodes: filters all requested nodes.'
+              },
+              excludeProps: {
+                type: 'array',
+                items: {
+                  type: 'string'
+                },
+                description: 'Properties to exclude from node data'
+              },
+              summarizeNodes: {
+                type: 'boolean',
+                description: 'Return only essential node properties to reduce response size'
               }
             },
             required: ['file_key', 'ids']
@@ -360,7 +410,15 @@ class FigmaMCPServer {
           }
 
           case 'get_file_nodes': {
-            const args = request.params.arguments as unknown as FileNodesArgs;
+            const args = request.params.arguments as unknown as FileNodesArgs & { 
+              pageSize?: number;
+              maxResponseSize?: number;
+              cursor?: string;
+              depth?: number;
+              nodeTypes?: string[];
+              excludeProps?: string[];
+              summarizeNodes?: boolean;
+            };
             if (!args.file_key) {
               throw new McpError(ErrorCode.InvalidParams, 'file_key is required');
             }
@@ -370,13 +428,62 @@ class FigmaMCPServer {
                 'ids array is required and must not be empty'
               );
             }
-            console.debug('[MCP Debug] Fetching file nodes', {
-              fileKey: args.file_key,
-              ids: args.ids,
-            });
-            const data = await this.figmaClient.getFileNodes(args.file_key, args.ids);
+            console.debug('[MCP Debug] Fetching file nodes', args);
+            const data = await this.figmaClient.getFileNodes(
+              args.file_key, 
+              args.ids, 
+              {
+                pageSize: args.pageSize,
+                maxResponseSize: args.maxResponseSize,
+                cursor: args.cursor,
+                depth: args.depth,
+                nodeTypes: args.nodeTypes,
+                excludeProps: args.excludeProps,
+                summarizeNodes: args.summarizeNodes
+              }
+            );
+            
+            // Check response size and provide helpful error if too large
+            const jsonString = JSON.stringify(data, null, 2);
+            const sizeInBytes = new TextEncoder().encode(jsonString).length;
+            const estimatedTokens = Math.ceil(sizeInBytes / 4); // ~4 bytes per token
+            
+            if (estimatedTokens > 25000) {
+              const helpfulError = {
+                error: 'Response too large',
+                estimatedTokens,
+                maxTokens: 25000,
+                currentParams: {
+                  pageSize: args.pageSize || 50,
+                  depth: args.depth || 'full',
+                  summarizeNodes: args.summarizeNodes || false
+                },
+                solutions: [
+                  '1. Use summarizeNodes: true to strip nodes to essentials',
+                  '2. Reduce pageSize to 10-25 (fetches fewer children per request)',
+                  '3. Set depth: 1 to fetch only immediate children',
+                  '4. Add excludeProps: ["fills", "effects", "strokes", "exportSettings"]',
+                  '5. Use cursor to paginate through children (cursor: "0" for first batch, "10" for second, etc.)'
+                ],
+                exampleCall: {
+                  file_key: args.file_key,
+                  ids: args.ids,
+                  pageSize: 10,
+                  depth: 1,
+                  summarizeNodes: true,
+                  excludeProps: ["fills", "effects", "strokes"],
+                  cursor: "0"
+                },
+                nodeInfo: data.pagination || { note: 'Multiple nodes requested - try fetching one at a time' }
+              };
+              
+              return {
+                content: [{ type: 'text', text: JSON.stringify(helpfulError, null, 2) }],
+              };
+            }
+            
             return {
-              content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+              content: [{ type: 'text', text: jsonString }],
             };
           }
 

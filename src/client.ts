@@ -26,11 +26,12 @@ class StreamingNodeProcessor {
     return Buffer.byteLength(JSON.stringify(node)) / 1024 / 1024; // Size in MB
   }
 
-  private filterNodeProperties(node: SceneNode): SceneNode {
-    if (!this.config.excludeProps?.length) return node;
+  public filterNodeProperties(node: SceneNode, excludeProps?: string[]): SceneNode {
+    const propsToExclude = excludeProps || this.config.excludeProps || [];
+    if (!propsToExclude.length) return node;
 
     const filteredNode = { ...node };
-    for (const prop of this.config.excludeProps) {
+    for (const prop of propsToExclude) {
       if (prop !== 'id' && prop !== 'type') { // Preserve required properties
         delete (filteredNode as any)[prop];
       }
@@ -38,7 +39,7 @@ class StreamingNodeProcessor {
     return filteredNode;
   }
 
-  private summarizeNode(node: SceneNode): SceneNode {
+  public summarizeNode(node: SceneNode): SceneNode {
     // Create a type-safe base object
     const base: Pick<SceneNode, 'id' | 'name' | 'visible'> & { type: SceneNode['type'] } = {
       id: node.id,
@@ -357,37 +358,375 @@ export class ChunkedFigmaClient {
     }
   }
 
-  async getFileNodes(fileKey: string, ids: string[]) {
+
+  /**
+   * Fetches specific nodes from a Figma file by their IDs.
+   * 
+   * For single node requests:
+   * - Implements pagination through the node's children
+   * - First fetches parent with depth=1 to get child list
+   * - Then fetches paginated children with requested depth
+   * 
+   * For multiple node requests:
+   * - Fetches all requested nodes at once
+   * - No pagination (returns all nodes)
+   * 
+   * @param fileKey - Figma file key
+   * @param ids - Array of node IDs to fetch
+   * @param options.pageSize - Number of children to fetch per page (single node only)
+   * @param options.cursor - Pagination cursor (child index to start from)
+   * @param options.depth - How deep to fetch children (default: 2)
+   * @param options.nodeTypes - Filter children by type (parent always kept)
+   * @param options.excludeProps - Properties to exclude from all nodes
+   * @param options.summarizeNodes - Return minimal node data
+   * @param options.maxResponseSize - Max response size in MB (warning only)
+   */
+  async getFileNodes(fileKey: string, ids: string[], options: {
+    pageSize?: number;
+    maxResponseSize?: number;
+    cursor?: string;
+    depth?: number;
+    nodeTypes?: string[];
+    excludeProps?: string[];
+    summarizeNodes?: boolean;
+  } = {}) {
     try {
-      console.debug('[MCP Debug] Getting nodes for file:', fileKey, 'IDs:', ids);
-      
-      // Process nodes in chunks to manage memory
-      const chunkSize = 50; // Process 50 nodes at a time
-      const chunks = [];
-      
-      for (let i = 0; i < ids.length; i += chunkSize) {
-        if (this.nodeProcessor.hasReachedLimit()) {
-          console.debug('[MCP Debug] Memory limit reached while processing nodes');
-          throw new Error('Memory limit exceeded while processing nodes');
-        }
-
-        const chunkIds = ids.slice(i, i + chunkSize);
-        const response = await this.client.get(`/files/${fileKey}/nodes`, {
-          params: { ids: chunkIds.join(',') },
-        });
-        
-        chunks.push(response.data);
+      // Input validation
+      if (!fileKey || typeof fileKey !== 'string' || fileKey.trim() === '') {
+        throw new Error('fileKey must be a non-empty string');
       }
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        throw new Error('ids must be a non-empty array');
+      }
+      
+      // Basic ID validation - Figma API will handle the rest
+      for (const id of ids) {
+        if (!id || typeof id !== 'string') {
+          throw new Error('All node IDs must be non-empty strings');
+        }
+      }
+      
+      if (process.env.MCP_DEBUG) {
+        console.debug('[MCP Debug] Getting nodes for file:', fileKey, 'Options:', options);
+      }
+      
+      const {
+        pageSize = 50,
+        maxResponseSize = 50,
+        cursor,
+        depth = 2,
+        nodeTypes,
+        excludeProps,
+        summarizeNodes = false
+      } = options;
+      
+      // Validate options
+      if (pageSize !== undefined) {
+        if (typeof pageSize !== 'number' || pageSize < 1 || pageSize > 1000) {
+          throw new Error('pageSize must be between 1 and 1000');
+        }
+      }
+      
+      if (depth !== undefined) {
+        if (typeof depth !== 'number' || depth < 0 || depth > 10) {
+          throw new Error('depth must be between 0 and 10');
+        }
+      }
+      
+      if (maxResponseSize !== undefined) {
+        if (typeof maxResponseSize !== 'number' || maxResponseSize < 1 || maxResponseSize > 100) {
+          throw new Error('maxResponseSize must be between 1 and 100 MB');
+        }
+      }
+      
+      if (excludeProps && excludeProps.length > 0) {
+        const criticalProps = ['id', 'type', 'name'];
+        for (const prop of excludeProps) {
+          if (criticalProps.includes(prop)) {
+            throw new Error(`Cannot exclude critical property: ${prop}`);
+          }
+        }
+      }
+      
 
-      // Merge chunks
-      const mergedData = {
-        nodes: chunks.reduce((acc, chunk) => ({ ...acc, ...chunk.nodes }), {})
+      // For single node requests, implement child pagination
+      if (ids.length === 1) {
+        const nodeId = ids[0];
+        
+        // Step 1: Fetch the parent node with depth=1 to get immediate children list
+        // We always fetch parent with depth=1 first for pagination to work
+        let shallowResponse;
+        try {
+          shallowResponse = await this.client.get(`/files/${fileKey}/nodes`, {
+            params: { 
+              ids: nodeId,
+              depth: 1 // Shallow fetch to get list of immediate children IDs
+            }
+          });
+        } catch (error: any) {
+          if (error.response?.status === 413 || error.response?.status === 504) {
+            throw new Error(
+              `Node is too large to fetch all at once. ` +
+              `Try these parameters to paginate through its children:\n` +
+              `- pageSize: 10 (fetch 10 children at a time)\n` +
+              `- cursor: "0" (start from first child)\n` +
+              `- depth: 1 (immediate children only)\n` +
+              `- summarizeNodes: true (minimal data)\n` +
+              `- excludeProps: ["fills", "effects", "strokes"] (remove heavy properties)`
+            );
+          }
+          throw error;
+        }
+        
+        if (!shallowResponse.data || !shallowResponse.data.nodes) {
+          throw new Error('Invalid response from Figma API');
+        }
+        
+        let mainNode = shallowResponse.data.nodes[nodeId];
+        if (!mainNode) {
+          throw new Error('Requested node not found');
+        }
+        
+        // Handle Figma's document wrapper - sometimes nodes come wrapped in a 'document' object
+        // Clone to avoid mutations
+        const actualNode = { ...(mainNode.document || mainNode) };
+        
+        // Step 2: Extract children IDs (safely)
+        const allChildIds: string[] = [];
+        if (actualNode.children) {
+          if (!Array.isArray(actualNode.children)) {
+            console.warn('[MCP Warning] Node children property is not an array');
+          } else {
+            for (const child of actualNode.children) {
+              if (child && typeof child === 'object' && child.id && typeof child.id === 'string') {
+                allChildIds.push(child.id);
+              }
+            }
+          }
+        }
+        
+        if (process.env.MCP_DEBUG) {
+          console.debug(`[MCP Debug] Found ${allChildIds.length} children`);
+        }
+        
+        // Step 3: Paginate through children
+        const startIndex = cursor ? parseInt(cursor, 10) : 0;
+        if (isNaN(startIndex) || startIndex < 0) {
+          throw new Error(`Invalid cursor value: ${cursor}. Must be a non-negative number.`);
+        }
+        if (startIndex >= allChildIds.length) {
+          // Cursor is beyond the last child - return empty result with hasMore=false
+          return {
+            nodes: { [nodeId]: actualNode },
+            pagination: {
+              totalChildren: allChildIds.length,
+              fetchedChildren: 0,
+              nextCursor: undefined,
+              hasMore: false,
+              message: allChildIds.length === 0 
+                ? 'Node has no children' 
+                : `Cursor beyond range (max: ${allChildIds.length - 1})`
+            }
+          };
+        }
+        const safePageSize = pageSize; // Already validated above
+        const endIndex = Math.min(startIndex + safePageSize, allChildIds.length);
+        const childIdsToFetch = allChildIds.slice(startIndex, endIndex);
+        
+        let childrenData: any = {};
+        
+        // Step 4: Fetch the selected page of children (if any)
+        if (childIdsToFetch.length > 0) {
+          const childParams: any = { 
+            ids: childIdsToFetch.join(',')
+          };
+          // Apply depth to children fetch (depth applies to how deep we fetch each child)
+          // depth=1 means fetch children with their immediate children
+          // depth=2 means fetch children with 2 levels of descendants, etc.
+          if (typeof depth === 'number' && depth >= 0) {
+            childParams.depth = depth;
+          }
+          
+          let childResponse;
+          try {
+            childResponse = await this.client.get(`/files/${fileKey}/nodes`, {
+              params: childParams,
+              timeout: 30000 // 30 second timeout
+            });
+          } catch (childError: any) {
+            console.error('[MCP Error] Failed to fetch children:', childError.message);
+            // Return partial result with parent only
+            return {
+              nodes: { [nodeId]: actualNode },
+              pagination: {
+                totalChildren: allChildIds.length,
+                fetchedChildren: 0,
+                nextCursor: startIndex.toString(),
+                hasMore: true,
+                error: 'Failed to fetch children, returning parent only'
+              }
+            };
+          }
+          
+          if (!childResponse.data || !childResponse.data.nodes) {
+            console.warn('[MCP Warning] Invalid response for child nodes, using empty object');
+            childrenData = {};
+          } else {
+            childrenData = childResponse.data.nodes;
+          }
+          
+          // Handle document wrapper for children too
+          for (const [childId, childNode] of Object.entries(childrenData)) {
+            if ((childNode as any).document) {
+              childrenData[childId] = (childNode as any).document;
+            }
+          }
+        }
+        
+        // Step 5: Combine parent and children nodes
+        // Note: We don't modify the parent's children array - it shows all children IDs
+        // The fetched children are separate entries in the nodes object
+        let processedData: any = {
+          [nodeId]: actualNode, // Parent node (already has full children array from depth=1 fetch)
+          ...childrenData       // Fetched children (based on pagination)
+        };
+        
+        // Filter by node types if specified
+        // Note: Parent node is always kept regardless of its type (for context)
+        if (nodeTypes && nodeTypes.length > 0) {
+          const filteredData: any = {
+            [nodeId]: processedData[nodeId] // Always keep parent for context
+          };
+          for (const [id, node] of Object.entries(processedData)) {
+            if (id !== nodeId) {
+              const nodeType = (node as any).type;
+              if (nodeType && nodeTypes.includes(nodeType)) {
+                filteredData[id] = node;
+              }
+            }
+          }
+          processedData = filteredData;
+        }
+        
+        // Exclude properties if specified
+        if (excludeProps && excludeProps.length > 0) {
+          const cleanedData: any = {};
+          for (const [id, node] of Object.entries(processedData)) {
+            cleanedData[id] = this.nodeProcessor.filterNodeProperties(node as SceneNode, excludeProps);
+          }
+          processedData = cleanedData;
+        }
+        
+        // Apply summarization if requested
+        if (summarizeNodes) {
+          const summarizedData: any = {};
+          for (const [id, node] of Object.entries(processedData)) {
+            summarizedData[id] = this.nodeProcessor.summarizeNode(node as SceneNode);
+          }
+          processedData = summarizedData;
+        }
+        
+        // Check response size (with safety for large objects)
+        let responseSize = 0;
+        try {
+          responseSize = JSON.stringify(processedData).length / (1024 * 1024); // in MB
+          if (responseSize > maxResponseSize) {
+            console.warn(`[MCP Warning] Response size ${responseSize.toFixed(2)}MB exceeds max ${maxResponseSize}MB`);
+          }
+        } catch (e) {
+          console.warn('[MCP Warning] Response too large to calculate size');
+        }
+        
+        return {
+          nodes: processedData,
+          pagination: {
+            totalChildren: allChildIds.length,
+            fetchedChildren: childIdsToFetch.length,
+            nextCursor: endIndex < allChildIds.length ? endIndex.toString() : undefined,
+            hasMore: endIndex < allChildIds.length
+          }
+        };
+      }
+      
+      // For multiple nodes, fetch them all at once (no child pagination)
+      
+      // Warn if pagination parameters are provided with multiple nodes
+      if (cursor || (pageSize && pageSize !== 50)) {
+        console.warn(
+          '[MCP Warning] Pagination parameters (pageSize, cursor) are ignored when fetching multiple nodes. ' +
+          'Pagination only works when fetching a single node (to paginate through its children).'
+        );
+      }
+      
+      const params: any = { ids: ids.join(',') };
+      if (typeof depth === 'number') params.depth = depth;
+      
+      const response = await this.client.get(`/files/${fileKey}/nodes`, {
+        params,
+        timeout: 30000 // 30 second timeout
+      });
+      
+      if (!response.data || !response.data.nodes) {
+        throw new Error('Invalid response from Figma API');
+      }
+      
+      let nodeData = response.data.nodes;
+      
+      // Handle document wrapper for multiple nodes
+      for (const [id, node] of Object.entries(nodeData)) {
+        if ((node as any).document) {
+          nodeData[id] = (node as any).document;
+        }
+      }
+      
+      // Apply filters and transformations
+      if (nodeTypes && nodeTypes.length > 0) {
+        const filteredNodes: any = {};
+        for (const [id, node] of Object.entries(nodeData)) {
+          const nodeType = (node as any).type;
+          if (nodeType && nodeTypes.includes(nodeType)) {
+            filteredNodes[id] = node;
+          }
+        }
+        nodeData = filteredNodes;
+      }
+      
+      if (excludeProps && excludeProps.length > 0) {
+        const processedNodes: any = {};
+        for (const [id, node] of Object.entries(nodeData)) {
+          processedNodes[id] = this.nodeProcessor.filterNodeProperties(node as SceneNode, excludeProps);
+        }
+        nodeData = processedNodes;
+      }
+      
+      if (summarizeNodes) {
+        const summarizedNodes: any = {};
+        for (const [id, node] of Object.entries(nodeData)) {
+          summarizedNodes[id] = this.nodeProcessor.summarizeNode(node as SceneNode);
+        }
+        nodeData = summarizedNodes;
+      }
+      
+      // Return with clear indication that pagination doesn't apply
+      const result: any = {
+        nodes: nodeData
       };
-
-      return mergedData;
-    } catch (error) {
-      console.error('[MCP Error] Failed to get file nodes:', error);
-      throw error;
+      
+      // Only include pagination info if user tried to use pagination params
+      if (cursor || (pageSize && pageSize !== 50)) {
+        result.pagination = {
+          warning: 'Pagination parameters were ignored. Pagination only works when fetching a single node.',
+          explanation: 'To paginate: fetch one node at a time, use pageSize and cursor to navigate through its children.'
+        };
+      }
+      
+      return result;
+    } catch (error: any) {
+      // Sanitize error messages
+      const message = error.message || 'Unknown error';
+      const sanitized = message.substring(0, 500); // Limit error message length
+      console.error('[MCP Error] Failed to get file nodes:', sanitized);
+      throw new Error(`Failed to get nodes: ${sanitized}`);
     }
   }
 }
