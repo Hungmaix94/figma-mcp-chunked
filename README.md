@@ -1,12 +1,13 @@
 [![MseeP.ai Security Assessment Badge](https://mseep.net/pr/archimedescrypto-figma-mcp-chunked-badge.png)](https://mseep.ai/app/archimedescrypto-figma-mcp-chunked)
 
 # Figma MCP Server with Chunking
-[![smithery badge](https://smithery.ai/badge/@ArchimedesCrypto/figma-mcp-chunked)](https://smithery.ai/server/@ArchimedesCrypto/figma-mcp-chunked)
+[![npm version](https://img.shields.io/npm/v/figma-mcp-chunked.svg)](https://www.npmjs.com/package/figma-mcp-chunked)
+[![smithery badge](https://smithery.ai/badge/figma-mcp-chunked)](https://smithery.ai/server/figma-mcp-chunked)
 
 A Model Context Protocol (MCP) server for interacting with the Figma API, featuring memory-efficient chunking and pagination capabilities for handling large Figma files.
 
-<a href="https://glama.ai/mcp/servers/@ArchimedesCrypto/figma-mcp-chunked">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/@ArchimedesCrypto/figma-mcp-chunked/badge" alt="Figma Server with Chunking MCP server" />
+<a href="https://glama.ai/mcp/servers/figma-mcp-chunked">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/figma-mcp-chunked/badge" alt="Figma Server with Chunking MCP server" />
 </a>
 
 ## Overview
@@ -27,12 +28,20 @@ This MCP server provides a robust interface to the Figma API with built-in memor
 
 ## Installation
 
-### Installing via Smithery
+### Using npx
 
-To install Figma MCP Server with Chunking for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@ArchimedesCrypto/figma-mcp-chunked):
+You can run the server directly without installing it by using `npx`:
 
 ```bash
-npx -y @smithery/cli install @ArchimedesCrypto/figma-mcp-chunked --client claude
+npx -y figma-mcp-chunked --config=path/to/config.json
+```
+
+### Installing via Smithery
+
+To install Figma MCP Server with Chunking for Claude Desktop automatically via [Smithery](https://smithery.ai/server/figma-mcp-chunked):
+
+```bash
+npx -y @smithery/cli install figma-mcp-chunked --client claude
 ```
 
 ### Manual Installation

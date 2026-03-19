@@ -281,7 +281,7 @@ export class ChunkedFigmaClient {
 
   async listFiles(params: { project_id?: string; team_id?: string }) {
     try {
-      console.debug('[MCP Debug] Listing files with params:', params);
+      console.error('[MCP Debug] Listing files with params:', params);
       const response = await this.client.get('/files', { params });
       return response.data;
     } catch (error) {
@@ -292,11 +292,11 @@ export class ChunkedFigmaClient {
 
   async getComponents(fileKey: string) {
     try {
-      console.debug('[MCP Debug] Getting components for file:', fileKey);
+      console.error('[MCP Debug] Getting components for file:', fileKey);
       const response = await this.client.get(`/files/${fileKey}/components`);
       
       if (this.nodeProcessor.hasReachedLimit()) {
-        console.debug('[MCP Debug] Memory limit reached while processing components');
+        console.error('[MCP Debug] Memory limit reached while processing components');
         throw new Error('Memory limit exceeded while processing components');
       }
 
@@ -309,11 +309,11 @@ export class ChunkedFigmaClient {
 
   async getStyles(fileKey: string) {
     try {
-      console.debug('[MCP Debug] Getting styles for file:', fileKey);
+      console.error('[MCP Debug] Getting styles for file:', fileKey);
       const response = await this.client.get(`/files/${fileKey}/styles`);
       
       if (this.nodeProcessor.hasReachedLimit()) {
-        console.debug('[MCP Debug] Memory limit reached while processing styles');
+        console.error('[MCP Debug] Memory limit reached while processing styles');
         throw new Error('Memory limit exceeded while processing styles');
       }
 
@@ -326,11 +326,11 @@ export class ChunkedFigmaClient {
 
   async getFileVersions(fileKey: string) {
     try {
-      console.debug('[MCP Debug] Getting versions for file:', fileKey);
+      console.error('[MCP Debug] Getting versions for file:', fileKey);
       const response = await this.client.get(`/files/${fileKey}/versions`);
       
       if (this.nodeProcessor.hasReachedLimit()) {
-        console.debug('[MCP Debug] Memory limit reached while processing versions');
+        console.error('[MCP Debug] Memory limit reached while processing versions');
         throw new Error('Memory limit exceeded while processing versions');
       }
 
@@ -343,11 +343,11 @@ export class ChunkedFigmaClient {
 
   async getFileComments(fileKey: string) {
     try {
-      console.debug('[MCP Debug] Getting comments for file:', fileKey);
+      console.error('[MCP Debug] Getting comments for file:', fileKey);
       const response = await this.client.get(`/files/${fileKey}/comments`);
       
       if (this.nodeProcessor.hasReachedLimit()) {
-        console.debug('[MCP Debug] Memory limit reached while processing comments');
+        console.error('[MCP Debug] Memory limit reached while processing comments');
         throw new Error('Memory limit exceeded while processing comments');
       }
 
@@ -407,7 +407,7 @@ export class ChunkedFigmaClient {
       }
       
       if (process.env.MCP_DEBUG) {
-        console.debug('[MCP Debug] Getting nodes for file:', fileKey, 'Options:', options);
+        console.error('[MCP Debug] Getting nodes for file:', fileKey, 'Options:', options);
       }
       
       const {
@@ -506,7 +506,7 @@ export class ChunkedFigmaClient {
         }
         
         if (process.env.MCP_DEBUG) {
-          console.debug(`[MCP Debug] Found ${allChildIds.length} children`);
+          console.error(`[MCP Debug] Found ${allChildIds.length} children`);
         }
         
         // Step 3: Paginate through children

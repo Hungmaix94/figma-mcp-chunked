@@ -9,11 +9,11 @@ export function loadConfig(): Config {
   if (configArg) {
     const configPath = configArg.split('=')[1];
     try {
-      console.debug('[MCP Debug] Loading config from', configPath);
+      console.error('[MCP Debug] Loading config from', configPath);
       const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
       const token = config.mcpServers?.figma?.env?.FIGMA_ACCESS_TOKEN;
       if (token) {
-        console.debug('[MCP Debug] Config loaded successfully');
+        console.error('[MCP Debug] Config loaded successfully');
         return { figmaAccessToken: token };
       }
     } catch (error) {
@@ -29,13 +29,13 @@ export function loadConfig(): Config {
     );
   }
 
-  console.debug('[MCP Debug] Using FIGMA_ACCESS_TOKEN from environment');
+  console.error('[MCP Debug] Using FIGMA_ACCESS_TOKEN from environment');
   return { figmaAccessToken: token };
 }
 
 export function getFigmaAccessToken(): string {
   const { figmaAccessToken } = loadConfig();
-  console.debug(
+  console.error(
     '[MCP Debug] Access token found',
     figmaAccessToken.substring(0, 8) + '...'
   );
