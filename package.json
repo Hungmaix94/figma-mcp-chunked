@@ -1,6 +1,6 @@
 {
   "name": "figma-mcp-chunked",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Figma MCP server with chunking and pagination",
   "type": "module",
   "main": "build/index.js",
